@@ -10,7 +10,7 @@ var path = require('path');
 module.exports = uploadService;
 
 function uploadService(opts) {
-    var options = configs.apply(opts);
+    var options = configs(opts);
     var transporter = options.storage.type === 'local' ? require('./lib/transport/local.js') : require('./lib/transport/aws.js');
 
     transporter = transporter(options);
@@ -27,7 +27,6 @@ function uploadService(opts) {
 
     fileUploader.get = function(req, res, callback) {
         this.config.host = req.headers.host;
-        setNoCacheHeaders(res);
         transporter.get(callback);
     };
 
