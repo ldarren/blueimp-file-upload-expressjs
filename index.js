@@ -1,122 +1,144 @@
 /*jslint node: true */
 'use strict';
 
-var FileInfo = require('./lib/fileinfo.js');
-var configs = require('./lib/configs.js');
-var formidable = require('formidable');
 var fs = require('fs');
 var path = require('path');
+var formidable = require('formidable');
+var FileInfo = require('./lib/fileinfo');
+var configs = require('./lib/configs');
 
-var getFileKey = function(filePath) {
+function getTransporters(opts, storages){
+	var transporters = [];
+	storages.forEach(function(storage){
+		switch(storage.type){
+		case 'local':
+			transporters.push(require('./lib/transport/local')(opts, storage));
+			break;
+		case 'aws':
+			transporters.push(require('./lib/transport/aws')(opts, storage));
+			break;
+		}
+	});
+	return transporters;
+}
+
+function calls(transporters, method, params, callback){
+	var count = transporters.length;
+	function cb(){
+		if (0 === --count) return callback.apply(null, arguments);
+	}
+
+	transporters.forEach(function(transporter){
+		transporter[method].apply(transporter, params.concat(cb));
+	});
+}
+
+function getFileKey(filePath) {
     return path.basename(filePath);
-};
+}
+
+function setNoCacheHeaders(res) {
+	res.setHeader('Pragma', 'no-cache');
+	res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+	res.setHeader('Content-Disposition', 'inline; filename="files.json"');
+}
+
+function validate(fileInfo, opts) {
+	if (opts.minFileSize && opts.minFileSize > fileInfo.size) {
+		fileInfo.error = 'File is too small';
+	} else if (opts.maxFileSize && opts.maxFileSize < fileInfo.size) {
+		fileInfo.error = 'File is too big';
+	} else if (!opts.acceptFileTypes.test(fileInfo.name)) {
+		fileInfo.error = 'Filetype not allowed';
+	}
+	return !fileInfo.error;
+}
 
 module.exports = function uploadService(opts) {
     var options = configs(opts);
-    var transporter = options.storage.type === 'local' ? require('./lib/transport/local.js') : require('./lib/transport/aws.js');
+	var transporters = getTransporters(options.storages);
 
-    transporter = transporter(options);
+    return {
+		get: function(req, res, callback) {
+			options.host = req.headers.host;
+			calls(transporters, 'get', [], callback);
+		},
+		post: function(req, res, callback) {
+			setNoCacheHeaders(res);
+			var form = new formidable.IncomingForm();
+			var tmpFiles = [];
+			var files = [];
+			var map = {};
+			var fields = {};
+			var redirect;
 
-    var fileUploader = {};
+			options.host = req.headers.host;
 
-    fileUploader.config = options;
+			req.body = req.body || {};
 
-    function setNoCacheHeaders(res) {
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-        res.setHeader('Content-Disposition', 'inline; filename="files.json"');
-    }
+			function finish(error, fileInfo) {
+				if (error) return callback(error, {
+					files: files
+				}, redirect);
 
-    fileUploader.get = function(req, res, callback) {
-        this.config.host = req.headers.host;
-        transporter.get(callback);
-    };
+				if (!fileInfo) return callback(null, {
+					files: files
+				}, redirect);
 
-    fileUploader.post = function(req, res, callback) {
-        setNoCacheHeaders(res);
-        var form = new formidable.IncomingForm();
-        var tmpFiles = [];
-        var files = [];
-        var map = {};
-        var fields = {};
-        var redirect;
+				var allFilesProccessed = true;
 
-        this.config.host = req.headers.host;
+				files.forEach(function(file, idx) {
+					allFilesProccessed = allFilesProccessed && file.proccessed;
+				});
 
-        var configs = this.config;
+				if (allFilesProccessed) {
+					callback(null, {
+						files: files
+					}, redirect);
+				}
+			}
 
-        req.body = req.body || {};
+			form.uploadDir = options.tmpDir;
 
-        function finish(error, fileInfo) {
+			form.on('fileBegin', function(name, file) {
+				tmpFiles.push(file.path);
+				// fix #41
+				options.saveFile = true;
+				var fileInfo = new FileInfo(file, options, fields);
+				map[getFileKey(file.path)] = fileInfo;
+				files.push(fileInfo);
+			}).on('field', function(name, value) {
+				fields[name] = value;
+				if (name === 'redirect') {
+					redirect = value;
+				}
+			}).on('file', function(name, file) {
+				var fileInfo = map[getFileKey(file.path)];
+				fileInfo.update(file);
+				if (!validate(fileInfo, options)) {
+					finish(fileInfo.error);
+					fs.unlink(file.path);
+					return;
+				}
 
-            if (error) return callback(error, {
-                files: files
-            }, redirect);
-
-            if (!fileInfo) return callback(null, {
-                files: files
-            }, redirect);
-
-            var allFilesProccessed = true;
-
-            files.forEach(function(file, idx) {
-                allFilesProccessed = allFilesProccessed && file.proccessed;
-            });
-
-            if (allFilesProccessed) {
-                callback(null, {
-                    files: files
-                }, redirect);
-            }
-        }
-
-        form.uploadDir = configs.tmpDir;
-
-        form.on('fileBegin', function(name, file) {
-            tmpFiles.push(file.path);
-            // fix #41
-            configs.saveFile = true;
-            var fileInfo = new FileInfo(file, configs, fields);
-            map[getFileKey(file.path)] = fileInfo;
-            files.push(fileInfo);
-        }).on('field', function(name, value) {
-            fields[name] = value;
-            if (name === 'redirect') {
-                redirect = value;
-            }
-        }).on('file', function(name, file) {
-            var fileInfo = map[getFileKey(file.path)];
-            fileInfo.update(file);
-            if (!fileInfo.validate()) {
-                finish(fileInfo.error);
-                fs.unlink(file.path);
-                return;
-            }
-
-            transporter.post(fileInfo, file, finish);
-
-        }).on('aborted', function() {
-            finish('aborted');
-            tmpFiles.forEach(function(file) {
-                fs.unlink(file);
-            });
-        }).on('error', function(e) {
-            console.log('form.error', e);
-            finish(e);
-        }).on('progress', function(bytesReceived) {
-            if (bytesReceived > configs.maxPostSize) {
-                req.connection.destroy();
-            }
-        }).on('end', function() {
-            //if (configs.storage.type == 'local') {
-            //    finish();
-            //}
-        }).parse(req);
-    };
-
-    fileUploader.delete = function(req, res, callback) {
-        transporter.delete(req, res, callback);
-    };
-
-    return fileUploader;
+				calls(transporters, 'post', [fileInfo, file], finish);
+			}).on('aborted', function() {
+				finish('aborted');
+				tmpFiles.forEach(function(file) {
+					fs.unlink(file);
+				});
+			}).on('error', function(e) {
+				console.log('form.error', e);
+				finish(e);
+			}).on('progress', function(bytesReceived) {
+				if (bytesReceived > options.maxPostSize) {
+					req.connection.destroy();
+				}
+			}).on('end', function() {
+			}).parse(req);
+		},
+		delete: function(req, res, callback) {
+			calls(transporters, 'delete', [req, res], callback);
+		}
+	};
 }
