@@ -4,6 +4,16 @@
 
 [![NPM](https://nodei.co/npm/blueimp-file-upload-expressjs.png?downloads=true)](https://nodei.co/npm/blueimp-file-upload-expressjs/)
 
+## Feature of this Forked Version
+- added thumbnail generation for s3 upload
+- fixed s3 upload, get and delete bugs in original version
+- fixed configuration corruption if more than one uploader created
+
+### Changes of this forked
+- `copyImgAsThumb` is no longer required, it is implicitly set by `imageVersions`
+- `uploadDir` is required and used by s3 upload
+- `maxWidth` and `maxHeight` in `imageVersions` has been removed
+
 ## * * This project is no longer under active maintenance, if anyone is interested to manage this, please reach out to me. * *
 
 A simple express module for integrating the *[jQuery File Upload](http://blueimp.github.io/jQuery-File-Upload/)* frontend plugin.
