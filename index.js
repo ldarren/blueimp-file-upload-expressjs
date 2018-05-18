@@ -7,10 +7,12 @@ var formidable = require('formidable');
 var fs = require('fs');
 var path = require('path');
 
-module.exports = uploadService;
+var getFileKey = function(filePath) {
+    return path.basename(filePath);
+};
 
-function uploadService(opts) {
-    var options = configs.apply(opts);
+module.exports = function uploadService(opts) {
+    var options = configs(opts);
     var transporter = options.storage.type === 'local' ? require('./lib/transport/local.js') : require('./lib/transport/aws.js');
 
     transporter = transporter(options);
@@ -27,7 +29,6 @@ function uploadService(opts) {
 
     fileUploader.get = function(req, res, callback) {
         this.config.host = req.headers.host;
-        setNoCacheHeaders(res);
         transporter.get(callback);
     };
 
@@ -76,7 +77,7 @@ function uploadService(opts) {
             // fix #41
             configs.saveFile = true;
             var fileInfo = new FileInfo(file, configs, fields);
-            map[fileInfo.key] = fileInfo;
+            map[getFileKey(file.path)] = fileInfo;
             files.push(fileInfo);
         }).on('field', function(name, value) {
             fields[name] = value;
@@ -84,7 +85,7 @@ function uploadService(opts) {
                 redirect = value;
             }
         }).on('file', function(name, file) {
-            var fileInfo = map[FileInfo.getFileKey(file.path)];
+            var fileInfo = map[getFileKey(file.path)];
             fileInfo.update(file);
             if (!fileInfo.validate()) {
                 finish(fileInfo.error);
