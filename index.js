@@ -14,7 +14,7 @@ function getTransporters(opts, storages){
 		case 'local':
 			transporters.push(require('./lib/transport/local')(opts, storage));
 			break;
-		case 'aws':
+		case 's3':
 			transporters.push(require('./lib/transport/aws')(opts, storage));
 			break;
 		}
@@ -56,19 +56,19 @@ function validate(fileInfo, opts) {
 
 module.exports = function uploadService(opts) {
     var options = configs(opts);
-	var transporters = getTransporters(options.storages);
+	var storages = options.storages;
+	var transporters = getTransporters(options, storages);
 
     return {
 		get: function(req, res, callback) {
 			options.host = req.headers.host;
-			calls(transporters, 'get', [], callback);
+			transporters[0].get(callback);
 		},
 		post: function(req, res, callback) {
 			setNoCacheHeaders(res);
 			var form = new formidable.IncomingForm();
 			var tmpFiles = [];
 			var files = [];
-			var map = {};
 			var fields = {};
 			var redirect;
 
@@ -101,27 +101,31 @@ module.exports = function uploadService(opts) {
 			form.uploadDir = options.tmpDir;
 
 			form.on('fileBegin', function(name, file) {
-				tmpFiles.push(file.path);
-				// fix #41
-				options.saveFile = true;
-				var fileInfo = new FileInfo(file, options, fields);
-				map[getFileKey(file.path)] = fileInfo;
-				files.push(fileInfo);
 			}).on('field', function(name, value) {
 				fields[name] = value;
 				if (name === 'redirect') {
 					redirect = value;
 				}
 			}).on('file', function(name, file) {
-				var fileInfo = map[getFileKey(file.path)];
-				fileInfo.update(file);
-				if (!validate(fileInfo, options)) {
-					finish(fileInfo.error);
-					fs.unlink(file.path);
-					return;
-				}
+				tmpFiles.push(file.path);
 
-				calls(transporters, 'post', [fileInfo, file], finish);
+				options.saveFile = true;
+				transporters.forEach(function(transporter, i){
+					var fileInfo = transporter.createFileInfo(file, fields);
+
+					if (!validate(fileInfo, options)) {
+						finish(fileInfo.error);
+						fs.unlink(file.path);
+						return;
+					}
+
+					if (!i) {
+						files.push(fileInfo);
+						transporter.post(fileInfo, file, finish);
+					} else {
+						transporter.post(fileInfo, file, function(){});
+					}
+				});
 			}).on('aborted', function() {
 				finish('aborted');
 				tmpFiles.forEach(function(file) {
