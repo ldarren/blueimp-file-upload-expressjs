@@ -99,6 +99,8 @@ module.exports = function uploadService(opts) {
 			}
 
 			form.uploadDir = options.tmpDir;
+			form.maxFieldsSize = options.maxPostSize;
+			form.maxFileSize = options.maxFileSize;
 
 			form.on('fileBegin', function(name, file) {
 			}).on('field', function(name, value) {
@@ -127,7 +129,7 @@ module.exports = function uploadService(opts) {
 					}
 				});
 			}).on('aborted', function() {
-				finish('aborted');
+				// error will be triggered after this
 				tmpFiles.forEach(function(file) {
 					fs.unlink(file);
 				});
